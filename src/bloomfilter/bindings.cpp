@@ -8,7 +8,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(bloom_filter_module, m) {
+PYBIND11_MODULE(_bloomfilter, m) {
     m.doc() = "Fast Bloom filter implementation with configurable false positive rate";
 
     py::class_<BloomFilter> bloom(m, "BloomFilter", "Space-efficient probabilistic set membership testing");
