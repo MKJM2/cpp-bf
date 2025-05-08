@@ -3,28 +3,24 @@ requires = ["scikit-build-core>=0.8", "pybind11[global]>=2.12"]
 build-backend = "scikit_build_core.build"
 
 [project]
-name            = "bloomfilter"
-version         = "0.1.0"
-description     = "Fast C++17 Bloom filter with a pure‑Python fallback"
-readme          = "README.md"
+name = "bloomfilter"
+version = "0.1.1"
+description = "Fast C++17 Bloom filter with a pure‑Python fallback"
+readme = "README.md"
 requires-python = ">=3.8"
-authors         = [{ name = "Michal Kurek", email = "mkurek@college.harvard.edu" }]
-license         = { text = "MIT" }
-classifiers     = [
+authors = [{ name = "Michal Kurek", email = "mkurek@college.harvard.edu" }]
+license = { text = "MIT" }
+classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: C++",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
-dependencies = [
-  "bitarray>=2.8",
-  "xxhash>=3.4",
-]
+dependencies = []
 
 [tool.scikit-build]
 cmake.source-dir = "src/bloomfilter"
 wheel.packages = ["src/bloomfilter"]
 cmake.minimum-version = "3.15"
 cmake.define = { CMAKE_CXX_STANDARD = "17" }
-

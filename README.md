@@ -83,6 +83,16 @@ Objects are fully pickleable; the byte array is stored compactly.
 
 ---
 
+## On the Kirsch-Mitzenmacher Optimization
+
+To efficiently generate multiple hash values for an item, this Bloom filter initially used a common technique known as the Kirsch-Mitzenmacher optimization. This method computes \(k\) hash functions using two base hash values, \(h_1\) and \(h_2\), as \(g_i(x) = (h_1(x) + i \cdot h_2(x)) \pmod m\), where \(m\) is the number of bits in the filter. This reduces the number of full hash computations needed.
+
+## On Peter Dillinger's Enhanced Double Hashing
+
+This implementation incorporates Peter Dillinger's "enhanced double hashing" from RocksDB. The step value is modified in each iteration (e.g., `delta += j`, where `j` is the iteration counter) before being added to the current hash. This adjustment empirically improves probe distribution and robustness (leading in experimentation to more reliable false positive rates).
+
+---
+
 ## License
 
 Released under the MIT License – see `LICENSE` for details.
