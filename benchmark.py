@@ -5,6 +5,14 @@ import os
 
 from bloom_filter import BloomFilter
 
+# --- Attempt to import rbloom for comparison ---
+try:
+    from rbloom import Bloom as RBloom # Alias to avoid name clash
+    RBLOOM_AVAILABLE = True
+except ImportError:
+    RBLOOM_AVAILABLE = False
+    print("INFO: 'rbloom' library not found. Skipping rbloom benchmark. To include it, run: pip install rbloom")
+
 # --- Add build directory to Python path to find the C++ module ---
 # Assumes benchmark.py is in the project root and the .so is in 'build/'
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -49,121 +57,140 @@ items_for_checking_phase = items_to_check_existing + items_to_check_non_existing
 random.shuffle(items_for_checking_phase)
 print("Data generation complete.")
 
+# Initialize result variables for all filters to handle conditional execution
+duration_add_cpp, duration_check_cpp, fp_rate_cpp = 0.0, 0.0, 0.0
+duration_add_py, duration_check_py, fp_rate_py = 0.0, 0.0, 0.0
+duration_add_rbloom, duration_check_rbloom, fp_rate_rbloom = 0.0, 0.0, 0.0
+cpp_bf_actual_size, cpp_bf_actual_hashes = "N/A", "N/A"
+py_bf_actual_size, py_bf_actual_hashes = "N/A", "N/A"
+rbloom_bf_actual_size, rbloom_bf_actual_hashes = "N/A", "N/A"
+
 # --- C++ Bloom Filter Benchmark ---
 print(f"\n--- C++ Bloom Filter (bloom_filter_module) ---")
 cpp_bf = None
-cpp_bf_actual_size = "N/A"
-cpp_bf_actual_hashes = "N/A"
 try:
     print(f"Initializing C++ Bloom Filter: capacity={BF_CAPACITY}, error_rate={BF_ERROR_RATE}")
     cpp_bf = bloom_filter_module.BloomFilter(BF_CAPACITY, BF_ERROR_RATE)
+    if hasattr(cpp_bf, 'num_bits'): cpp_bf_actual_size = cpp_bf.num_bits
+    if hasattr(cpp_bf, 'num_hashes'): cpp_bf_actual_hashes = cpp_bf.num_hashes
     print(f"  C++ BF Initialized. Effective params (if exposed): Size={cpp_bf_actual_size} bits, Hashes={cpp_bf_actual_hashes}")
+except Exception as e:
+    print(f"Error during C++ Bloom Filter setup: {e}")
+    cpp_bf = None # Ensure it's None if setup fails
 
-except AttributeError as e:
-    print(f"Error: Class 'BloomFilter' not found or method missing in 'bloom_filter_module'. {e}")
-    sys.exit(1)
-except TypeError as e:
-    print(f"Error: Could not initialize bloom_filter_module.BloomFilter with capacity={BF_CAPACITY}, error_rate={BF_ERROR_RATE}.")
-    print(f"  TypeError: {e}")
-    print("  This usually means the C++ BloomFilter constructor signature (and its bindings)")
-    print("  does not match (capacity, error_rate) or a required method is missing.")
-    sys.exit(1)
+if cpp_bf:
+    start_time = time.perf_counter()
+    for item in items_to_add:
+        cpp_bf.add(str(item))
+    duration_add_cpp = time.perf_counter() - start_time
+    print(f"Time to add {NUM_ITEMS_TO_ADD} items (C++): {duration_add_cpp:.6f} seconds")
 
-if not hasattr(cpp_bf, 'add'):
-    print("Error: C++ BloomFilter object does not have an 'add' method.")
-    sys.exit(1)
-
-start_time = time.perf_counter()
-for item in items_to_add:
-    cpp_bf.add(str(item))
-duration_add_cpp = time.perf_counter() - start_time
-print(f"Time to add {NUM_ITEMS_TO_ADD} items (C++): {duration_add_cpp:.6f} seconds")
-
-contains_method_name_cpp = ''
-if hasattr(cpp_bf, 'contains'): contains_method_name_cpp = 'contains'
-elif hasattr(cpp_bf, '__contains__'): contains_method_name_cpp = '__contains__'
+    false_positives_cpp = 0
+    start_time = time.perf_counter()
+    for item in items_for_checking_phase:
+        if str(item) in cpp_bf:
+            if item in items_to_check_non_existing:
+                false_positives_cpp += 1
+    duration_check_cpp = time.perf_counter() - start_time
+    print(f"Time to check {len(items_for_checking_phase)} items (C++): {duration_check_cpp:.6f} seconds")
+    fp_rate_cpp = (false_positives_cpp / num_new_to_check) if num_new_to_check > 0 else 0.0
+    print(f"False Positive Rate (C++): {fp_rate_cpp:.6f} ({false_positives_cpp}/{num_new_to_check})")
 else:
-    print("Error: C++ BloomFilter object does not have a 'contains' or '__contains__' method.")
-    sys.exit(1)
-
-cpp_check_func = getattr(cpp_bf, contains_method_name_cpp)
-
-false_positives_cpp = 0
-start_time = time.perf_counter()
-for item in items_for_checking_phase:
-    result = cpp_check_func(str(item))
-    if result and item in items_to_check_non_existing:
-        false_positives_cpp += 1
-duration_check_cpp = time.perf_counter() - start_time
-print(f"Time to check {len(items_for_checking_phase)} items (C++): {duration_check_cpp:.6f} seconds")
-
-fp_rate_cpp = (false_positives_cpp / num_new_to_check) if num_new_to_check > 0 else 0.0
-print(f"False Positive Rate (C++): {fp_rate_cpp:.6f} ({false_positives_cpp}/{num_new_to_check})")
+    print("Skipping C++ Bloom Filter benchmark due to initialization error.")
 
 # --- Python Bloom Filter (from bloom_filter.py) Benchmark ---
 print(f"\n--- Python Bloom Filter (bloom_filter.py) ---")
-print(f"Initializing Python Bloom Filter: capacity={{BF_CAPACITY}}, error_rate={{BF_ERROR_RATE}}")
-# KeyType is str because we are adding stringified integers
-py_bf = BloomFilter[str](capacity=BF_CAPACITY, error_rate=BF_ERROR_RATE)
-print(f"  Python BF Initialized. Effective params: Size={{py_bf.size}} bits, Hashes={{py_bf.num_hashes}}")
+py_bf = None
+try:
+    print(f"Initializing Python Bloom Filter: capacity={BF_CAPACITY}, error_rate={BF_ERROR_RATE}")
+    py_bf = BloomFilter[str](capacity=BF_CAPACITY, error_rate=BF_ERROR_RATE)
+    py_bf_actual_size = py_bf.size
+    py_bf_actual_hashes = py_bf.num_hashes
+    print(f"  Python BF Initialized. Effective params: Size={py_bf_actual_size} bits, Hashes={py_bf_actual_hashes}")
+except Exception as e:
+    print(f"Error during Python (bloom_filter.py) Bloom Filter setup: {e}")
+    py_bf = None
 
-start_time = time.perf_counter()
-for item in items_to_add:
-    py_bf.add(str(item)) # Add as string
-duration_add_py = time.perf_counter() - start_time
-print(f"Time to add {NUM_ITEMS_TO_ADD} items (Python): {duration_add_py:.6f} seconds")
+if py_bf is not None:
+    start_time = time.perf_counter()
+    for item in items_to_add:
+        py_bf.add(str(item))
+    duration_add_py = time.perf_counter() - start_time
+    print(f"Time to add {NUM_ITEMS_TO_ADD} items (Python): {duration_add_py:.6f} seconds")
 
-false_positives_py = 0
-start_time = time.perf_counter()
-for item in items_for_checking_phase:
-    result = str(item) in py_bf # Check as string
-    if result and item in items_to_check_non_existing:
-        false_positives_py += 1
-duration_check_py = time.perf_counter() - start_time
-print(f"Time to check {len(items_for_checking_phase)} items (Python): {duration_check_py:.6f} seconds")
+    false_positives_py = 0
+    start_time = time.perf_counter()
+    for item in items_for_checking_phase:
+        if str(item) in py_bf:
+            if item in items_to_check_non_existing:
+                false_positives_py += 1
+    duration_check_py = time.perf_counter() - start_time
+    print(f"Time to check {len(items_for_checking_phase)} items (Python): {duration_check_py:.6f} seconds")
+    fp_rate_py = (false_positives_py / num_new_to_check) if num_new_to_check > 0 else 0.0
+    print(f"False Positive Rate (Python): {fp_rate_py:.6f} ({false_positives_py}/{num_new_to_check})")
+else:
+    print("Skipping Python (bloom_filter.py) Bloom Filter benchmark due to initialization error.")
 
-fp_rate_py = (false_positives_py / num_new_to_check) if num_new_to_check > 0 else 0.0
-print(f"False Positive Rate (Python): {fp_rate_py:.6f} ({false_positives_py}/{num_new_to_check})")
+# --- rbloom Library Benchmark ---
+if RBLOOM_AVAILABLE:
+    print(f"\n--- rbloom Library Filter ---")
+    rbloom_bf = None
+    try:
+        print(f"Initializing rbloom.Bloom Filter: capacity={BF_CAPACITY}, error_rate={BF_ERROR_RATE}")
+        rbloom_bf = RBloom(expected_items=BF_CAPACITY, false_positive_rate=BF_ERROR_RATE)
+        # rbloom does not directly expose num_bits/num_hashes in a simple way like the others
+        # It uses a more complex internal structure (layers of sub-filters)
+        # We can estimate or try to infer, but for now, we'll mark as N/A
+        rbloom_bf_actual_size = "N/A (see rbloom internals)"
+        rbloom_bf_actual_hashes = "N/A (see rbloom internals)"
+        print(f"  rbloom BF Initialized.")
+    except Exception as e:
+        print(f"Error during rbloom.Bloom Filter setup: {e}")
+        rbloom_bf = None
+
+    if rbloom_bf is not None:
+        start_time = time.perf_counter()
+        for item in items_to_add:
+            rbloom_bf.add(str(item)) # rbloom also expects string or bytes
+        duration_add_rbloom = time.perf_counter() - start_time
+        print(f"Time to add {NUM_ITEMS_TO_ADD} items (rbloom): {duration_add_rbloom:.6f} seconds")
+
+        false_positives_rbloom = 0
+        start_time = time.perf_counter()
+        for item in items_for_checking_phase:
+            if str(item) in rbloom_bf:
+                if item in items_to_check_non_existing:
+                    false_positives_rbloom += 1
+        duration_check_rbloom = time.perf_counter() - start_time
+        print(f"Time to check {len(items_for_checking_phase)} items (rbloom): {duration_check_rbloom:.6f} seconds")
+        fp_rate_rbloom = (false_positives_rbloom / num_new_to_check) if num_new_to_check > 0 else 0.0
+        print(f"False Positive Rate (rbloom): {fp_rate_rbloom:.6f} ({false_positives_rbloom}/{num_new_to_check})")
+    else:
+        print("Skipping rbloom benchmark due to initialization error or library not available.")
 
 # --- Summary ---
 print(f"\n--- Summary ---")
 print(f"Target Capacity for Filters: {BF_CAPACITY}")
 print(f"Target Error Rate for Filters: {BF_ERROR_RATE}")
 print(f"Items added to each filter: {NUM_ITEMS_TO_ADD}")
-print(f"Items checked for each filter: {len(items_for_checking_phase)}")
+print(f"Items checked (50% existing, 50% new): {len(items_for_checking_phase)}")
 
-print(f"\nC++ Bloom Filter Effective Parameters (if exposed by bindings):")
-print(f"  Calculated Size: {cpp_bf_actual_size} bits")
-print(f"  Calculated Hash Functions: {cpp_bf_actual_hashes}")
+print(f"\nC++ Bloom Filter (bloom_filter_module):")
+print(f"  Effective Size: {cpp_bf_actual_size} bits, Hashes: {cpp_bf_actual_hashes}")
+print(f"  Add time: {duration_add_cpp:.6f}s, Check time: {duration_check_cpp:.6f}s, FPR: {fp_rate_cpp:.6f}")
 
-print(f"\nPython Bloom Filter (bloom_filter.py) Effective Parameters:")
-print(f"  Calculated Size: {py_bf.size} bits") # Accessing .size directly
-print(f"  Calculated Hash Functions: {py_bf.num_hashes}") # Accessing .num_hashes directly
+print(f"\nPython Bloom Filter (bloom_filter.py):")
+print(f"  Effective Size: {py_bf_actual_size} bits, Hashes: {py_bf_actual_hashes}")
+print(f"  Add time: {duration_add_py:.6f}s, Check time: {duration_check_py:.6f}s, FPR: {fp_rate_py:.6f}")
 
-print(f"\nAddition Times:")
-print(f"  C++:    {duration_add_cpp:.6f} seconds")
-print(f"  Python: {duration_add_py:.6f} seconds")
-if duration_add_py > 0 and duration_add_cpp > 0:
-    print(f"  C++ was {duration_add_py/duration_add_cpp:.2f}x faster at adding items.")
-elif duration_add_cpp == 0 and duration_add_py > 0:
-    print("  C++ addition was instantaneous or too fast to measure accurately compared to Python.")
-
-print(f"\nCheck Times (for 'contains'):")
-print(f"  C++:    {duration_check_cpp:.6f} seconds")
-print(f"  Python: {duration_check_py:.6f} seconds")
-if duration_check_py > 0 and duration_check_cpp > 0:
-    print(f"  C++ was {duration_check_py/duration_check_cpp:.2f}x faster at checking items.")
-elif duration_check_cpp == 0 and duration_check_py > 0:
-     print("  C++ checking was instantaneous or too fast to measure accurately compared to Python.")
-
-print(f"\nFalse Positive Rates (on {num_new_to_check} non-existing items):")
-print(f"  C++:    {fp_rate_cpp:.6f}")
-print(f"  Python: {fp_rate_py:.6f}")
+if RBLOOM_AVAILABLE:
+    print(f"\nrbloom Library Filter:")
+    print(f"  Effective Size: {rbloom_bf_actual_size}, Hashes: {rbloom_bf_actual_hashes}")
+    print(f"  Add time: {duration_add_rbloom:.6f}s, Check time: {duration_check_rbloom:.6f}s, FPR: {fp_rate_rbloom:.6f}")
 
 print(f"\nTo run this benchmark:")
-print(f"1. Ensure your C++ Bloom Filter is compiled (e.g., run 'cmake --build build' in project root).")
-print(f"2. Ensure 'bloom_filter.py' is in the same directory as this script.")
-print(f"3. Run this script: python benchmark.py")
-print(f"4. IMPORTANT: If your C++ BloomFilter class in 'bloom_filter_module' has a different constructor,")
-print(f"   or does not expose methods/properties like 'size_in_bits' or 'num_hashes' as attempted,")
-print(f"   you may need to adjust its instantiation or how effective parameters are retrieved (around line ~50).") 
+print(f"1. Ensure C++ Bloom Filter is compiled ('cmake --build build').")
+print(f"2. Ensure 'bloom_filter.py' is present.")
+print(f"3. For rbloom comparison, install it: pip install rbloom")
+print(f"4. Run script: python benchmark.py")
+print(f"5. Note: If C++ BloomFilter constructor/properties differ, adjust script around line ~60.") 
